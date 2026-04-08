@@ -628,19 +628,24 @@
 
     <script>
         // ==================== CONFIGURATION ====================
-        // PASTE YOUR GOOGLE APPS SCRIPT URL HERE:
-        let SCRIPT_URL = localStorage.getItem('prismaScriptUrl') || 'https://script.google.com/macros/s/AKfycbxQyjbi81adsZG6ADQYYA0b3YQzHwMz1JuwTdsiFoE8F0m3Oj9T7cLX7dXaRrxOqQ/exec';
+        // رابط Google Apps Script — مثبّت مباشرة + احتياطي من localStorage
+        const HARDCODED_URL = 'https://script.google.com/macros/s/AKfycbxQyjbi81adsZG6ADQYYA0b3YQzHwMz1JuwTdsiFoE8F0m3Oj9T7cLX7dXaRrxOqQ/exec';
+        let SCRIPT_URL = localStorage.getItem('prismaScriptUrl') || HARDCODED_URL;
 
         // ==================== STATE ====================
         let allData = [];
         let filteredData = [];
         let refreshInterval = null;
+        let fetchRetryCount = 0;
+        const MAX_FETCH_RETRIES = 3;
 
         // ==================== INITIALIZATION ====================
         document.addEventListener('DOMContentLoaded', () => {
             initializeEventListeners();
             loadConfigFromStorage();
             if (SCRIPT_URL) {
+                // إظهار واجهة التحميل فوراً
+                showLoadingState();
                 fetchData();
                 startAutoRefresh();
             } else {
@@ -688,6 +693,9 @@
             if (stored) {
                 SCRIPT_URL = stored;
                 document.getElementById('scriptUrlInput').value = stored;
+            } else if (HARDCODED_URL) {
+                SCRIPT_URL = HARDCODED_URL;
+                document.getElementById('scriptUrlInput').value = HARDCODED_URL;
             }
         }
 
@@ -703,18 +711,46 @@
             btn.innerHTML = '<span class="loading"></span>';
             btn.disabled = true;
 
-            fetch(SCRIPT_URL)
-                .then(response => response.json())
-                .then(data => {
-                    if (Array.isArray(data)) {
-                        allData = data;
-                        filterData('');
-                        updateSummaryCards();
-                        hideNoConfigMessage();
+            fetch(SCRIPT_URL, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
                     }
+                    return response.json();
+                })
+                .then(data => {
+                    // دعم كلا صيغتي الاستجابة: مصفوفة مباشرة أو كائن {data: [...]}
+                    let records = [];
+                    if (Array.isArray(data)) {
+                        records = data;
+                    } else if (data && Array.isArray(data.data)) {
+                        records = data.data;
+                    }
+
+                    allData = records;
+                    filteredData = [...records];
+                    fetchRetryCount = 0; // إعادة تعيين عدّاد المحاولات
+                    renderTable();
+                    updateSummaryCards();
+                    hideNoConfigMessage();
                 })
                 .catch(error => {
                     console.error('خطأ في جلب البيانات:', error);
+                    fetchRetryCount++;
+
+                    // إعادة محاولة تلقائية عند فشل التحميل الأول (cold start)
+                    if (fetchRetryCount <= MAX_FETCH_RETRIES) {
+                        console.log('⏳ إعادة محاولة (' + fetchRetryCount + '/' + MAX_FETCH_RETRIES + ')...');
+                        setTimeout(fetchData, 2000 * fetchRetryCount);
+                    } else {
+                        showErrorState();
+                    }
+
+                    // إظهار الجدول حتى لو فاضي حتى ما يختفي الـ UI
+                    hideNoConfigMessage();
                 })
                 .finally(() => {
                     btn.innerHTML = originalText;
@@ -835,6 +871,26 @@
             document.getElementById('summaryCards').style.display = 'grid';
             document.getElementById('controlsBar').style.display = 'flex';
             document.getElementById('tableContainer').style.display = 'block';
+        }
+
+        function showLoadingState() {
+            // إظهار الواجهة فوراً مع حالة تحميل
+            document.getElementById('noConfigMessage').style.display = 'none';
+            document.getElementById('summaryCards').style.display = 'grid';
+            document.getElementById('controlsBar').style.display = 'flex';
+            document.getElementById('tableContainer').style.display = 'block';
+            document.getElementById('totalParticipants').innerHTML = '<span class="loading"></span>';
+            document.getElementById('prizeWinners').innerHTML = '<span class="loading"></span>';
+            document.getElementById('betterLuckCount').innerHTML = '<span class="loading"></span>';
+        }
+
+        function showErrorState() {
+            const emptyState = document.getElementById('emptyState');
+            if (emptyState) {
+                emptyState.style.display = 'block';
+                emptyState.innerHTML = '<p style="color:#ff6b6b;">⚠️ تعذر الاتصال بالخادم — يرجى المحاولة لاحقاً</p>' +
+                    '<p style="font-size:13px; color:#707070;">تأكد من صحة رابط Apps Script أو اضغط تحديث يدوي</p>';
+            }
         }
 
         // ==================== UTILITIES ====================
